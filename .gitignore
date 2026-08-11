@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+data/football.db
+models/saved/
+logs/
+.DS_Store
+*.egg-info/
+sporttery_scraper.py
+jc_today.py
+data/sporttery/
