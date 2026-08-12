@@ -1,7 +1,8 @@
 """
-Soccerway 数据采集器 v2 — 基于 Playwright 浏览器
+Soccerway 数据采集器 v3 — Playwright + .ui-table 结构
 
-采集: 积分榜、球队统计
+Soccerway 与 FlashScore 同属一家，使用相同的 .ui-table 结构。
+URL 结构: https://int.soccerway.com/{country}/{league}/ (2026/27 赛季无需季节路径)
 """
 
 import json
@@ -12,22 +13,30 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from bs4 import BeautifulSoup
-
 logger = logging.getLogger(__name__)
 
 
 class SoccerwayCollector:
-    """Soccerway 数据采集器 (Playwright)"""
+    """Soccerway 数据采集器"""
 
     BASE_URL = "https://int.soccerway.com"
 
+    # 联赛 URL (2026/27 赛季)
     LEAGUES = {
-        "eng_premier": ("/national/england/premier-league/2025-2026/r28562/", "英超"),
-        "esp_la_liga": ("/national/spain/primera-division/2025-2026/r28645/", "西甲"),
-        "ita_serie_a": ("/national/italy/serie-a/2025-2026/r28603/", "意甲"),
-        "ger_bundesliga": ("/national/germany/bundesliga/2025-2026/r28582/", "德甲"),
-        "fra_ligue_1": ("/national/france/ligue-1/2025-2026/r28551/", "法甲"),
+        "eng_premier": ("/england/premier-league/", "英超"),
+        "esp_la_liga": ("/spain/primera-division/", "西甲"),
+        "ita_serie_a": ("/italy/serie-a/", "意甲"),
+        "ger_bundesliga": ("/germany/bundesliga/", "德甲"),
+        "fra_ligue_1": ("/france/ligue-1/", "法甲"),
+        "ned_eredivisie": ("/netherlands/eredivisie/", "荷甲"),
+        "por_primeira": ("/portugal/portuguese-liga-/", "葡超"),
+        "bra_serie_a": ("/brazil/serie-a/", "巴甲"),
+        "chn_super": ("/china-pr/super-league/", "中超"),
+        "jpn_j1": ("/japan/j1-league/", "日职"),
+        "kor_k1": ("/korea-republic/k-league-1/", "韩K"),
+        "saudi_pro": ("/saudi-arabia/pro-league/", "沙职"),
+        "ucl": ("/europe/uefa-champions-league/", "欧冠"),
+        "uel": ("/europe/uefa-cup/", "欧罗巴"),
     }
 
     def __init__(self, output_dir: Optional[Path] = None):
@@ -48,7 +57,7 @@ class SoccerwayCollector:
             chrome = None
         self._browser = self._p.chromium.launch(
             headless=True, executable_path=chrome,
-            args=["--no-sandbox"],
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
         )
         return self._browser, self._p
 
@@ -57,66 +66,63 @@ class SoccerwayCollector:
         if not info:
             return []
 
-        url = f"{self.BASE_URL}{info[0]}"
+        url = f"{self.BASE_URL}{info[0]}standings/"
         browser, _ = self._get_browser()
         page = browser.new_page()
 
         try:
-            page.goto(url, timeout=30000, wait_until="networkidle")
-            page.wait_for_timeout(3000)
-            html = page.content()
+            page.goto(url, timeout=25000, wait_until="domcontentloaded")
+            page.wait_for_timeout(5000)
+
+            ui_table = page.query_selector(".ui-table")
+            if not ui_table:
+                logger.warning(f"  未找到 {league_key} 积分榜")
+                return []
+
+            rows = ui_table.query_selector_all(".ui-table__row")
+            standings = []
+
+            for row in rows:
+                try:
+                    text = row.inner_text()
+                    if not text.strip():
+                        continue
+                    parts = text.strip().split("\n")
+                    # Soccerway 格式: rank. / team / MP / W / D / L / G(0:0) / GD / PTS / FORM
+                    if len(parts) >= 9:
+                        rank = self._safe_int(parts[0].replace(".", ""))
+                        team = parts[1]
+                        played = self._safe_int(parts[2])
+                        wins = self._safe_int(parts[3])
+                        draws = self._safe_int(parts[4])
+                        losses = self._safe_int(parts[5])
+                        goals = parts[6].split(":")
+                        gf = self._safe_int(goals[0])
+                        ga = self._safe_int(goals[1]) if len(goals) > 1 else 0
+                        gd = self._safe_int(parts[7])
+                        pts = self._safe_int(parts[8])
+
+                        if team and rank:
+                            standings.append({
+                                "rank": rank,
+                                "teamName": team,
+                                "played": played or 0,
+                                "wins": wins or 0,
+                                "draws": draws or 0,
+                                "losses": losses or 0,
+                                "goalsFor": gf or 0,
+                                "goalsAgainst": ga or 0,
+                                "goalDiff": gd or ((gf or 0) - (ga or 0)),
+                                "points": pts or 0,
+                                "league": league_key,
+                                "source": "soccerway",
+                            })
+                except Exception as e:
+                    logger.debug(f"  行解析失败: {e}")
+
+            return standings
         finally:
             page.close()
-
-        soup = BeautifulSoup(html, "html.parser")
-        table = soup.find("table", class_="leaguetable")
-        if not table:
-            # Try generic table
-            table = soup.find("table")
-
-        if not table:
-            logger.warning(f"  未找到 {league_key} 表格")
-            return []
-
-        standings = []
-        tbody = table.find("tbody")
-        if not tbody:
-            return standings
-
-        for tr in tbody.find_all("tr"):
-            cells = tr.find_all("td")
-            if len(cells) < 8:
-                continue
-            try:
-                rank = self._safe_int(cells[0].get_text(strip=True))
-                team = cells[1].get_text(strip=True)
-                played = self._safe_int(cells[2].get_text(strip=True))
-                wins = self._safe_int(cells[3].get_text(strip=True))
-                draws = self._safe_int(cells[4].get_text(strip=True))
-                losses = self._safe_int(cells[5].get_text(strip=True))
-                gf = self._safe_int(cells[6].get_text(strip=True))
-                ga = self._safe_int(cells[7].get_text(strip=True))
-                pts = self._safe_int(cells[-1].get_text(strip=True)) if len(cells) > 8 else 0
-
-                if team and rank:
-                    standings.append({
-                        "rank": rank,
-                        "teamName": team,
-                        "played": played or 0,
-                        "wins": wins or 0,
-                        "draws": draws or 0,
-                        "losses": losses or 0,
-                        "goalsFor": gf or 0,
-                        "goalsAgainst": ga or 0,
-                        "goalDiff": (gf or 0) - (ga or 0),
-                        "points": pts or 0,
-                        "league": league_key,
-                        "source": "soccerway",
-                    })
-            except Exception:
-                continue
-
-        return standings
 
     def collect_standings(self, league_keys: Optional[List[str]] = None) -> Dict[str, List[Dict]]:
         if league_keys is None:
@@ -131,7 +137,9 @@ class SoccerwayCollector:
                 standings = self.get_standings(key)
                 if standings:
                     all_standings[key] = standings
-                    logger.info(f"  {cn}: {len(standings)} 队")
+                    logger.info(f"  {cn}: {len(standings)} 队 (top: {standings[0]['teamName']})")
+                else:
+                    logger.warning(f"  {cn}: 无数据")
                 time.sleep(2)
             except Exception as e:
                 logger.error(f"  {cn} 失败: {e}")
