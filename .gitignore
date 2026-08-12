@@ -7,3 +7,8 @@ logs/
 .DS_Store
 *.egg-info/
 
+data/sporttery/
+data/flashscore/
+data/fbref/
+data/soccerway/
+data/five_hundred/
