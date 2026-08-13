@@ -1,0 +1,12 @@
+# Git worktrees (local only)
+.worktrees/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Temp files
+*.tmp
+_enc_data.tmp
