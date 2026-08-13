@@ -33,6 +33,7 @@ from data.collectors.sporttery import SportteryCollector
 from data.collectors.flashscore import FlashScoreCollector
 from data.collectors.fbref import FBrefCollector
 from data.collectors.soccerway import SoccerwayCollector
+from data.collectors.football_data import FootballDataCollector
 
 logging.basicConfig(
     level=logging.INFO,
@@ -92,6 +93,125 @@ class DataPipeline:
         from data.collectors.five_hundred import FiveHundredCollector
         collector = FiveHundredCollector()
         return collector.collect_all()
+
+    def collect_football_data(self) -> dict:
+        """采集 football-data.co.uk 历史数据"""
+        collector = FootballDataCollector()
+        return collector.collect_all()
+
+    def ingest_football_data(self, matches_by_league: Dict[str, List[Dict]]) -> int:
+        """将 football-data 历史数据写入数据库"""
+        count = 0
+        for league_key, matches in matches_by_league.items():
+            for m in matches:
+                try:
+                    home_team = m.get("homeTeam", "")
+                    away_team = m.get("awayTeam", "")
+                    if not home_team or not away_team:
+                        continue
+
+                    # 联赛记录
+                    self.db.upsert_league({
+                        "league_id": league_key,
+                        "name": m.get("leagueCn", league_key),
+                        "country": "",
+                        "tier": 1,
+                        "season": m.get("season", ""),
+                    })
+
+                    home_team_id = self._extract_team_code(home_team, league_key)
+                    away_team_id = self._extract_team_code(away_team, league_key)
+
+                    # 球队
+                    self.db.upsert_team({
+                        "team_id": home_team_id,
+                        "name": home_team,
+                        "short_name": home_team,
+                        "country": "",
+                        "league_id": league_key,
+                        "elo_rating": 1500.0,
+                        "attack_strength": 1.0,
+                        "defense_strength": 1.0,
+                        "home_advantage": 0.0,
+                    })
+                    self.db.upsert_team({
+                        "team_id": away_team_id,
+                        "name": away_team,
+                        "short_name": away_team,
+                        "country": "",
+                        "league_id": league_key,
+                        "elo_rating": 1500.0,
+                        "attack_strength": 1.0,
+                        "defense_strength": 1.0,
+                        "home_advantage": 0.0,
+                    })
+
+                    # 生成 match_id (联赛_日期_主队_客队)
+                    date_str = (m.get("date", "") or "").replace("-", "")
+                    match_id = f"{league_key}_{date_str}_{home_team_id}_{away_team_id}"
+
+                    fthg = m.get("fullTimeHomeGoals")
+                    ftag = m.get("fullTimeAwayGoals")
+                    hthg = m.get("halfTimeHomeGoals")
+                    htag = m.get("halfTimeAwayGoals")
+
+                    # 比赛
+                    self.db.upsert_match({
+                        "match_id": match_id,
+                        "league_id": league_key,
+                        "season": m.get("season", ""),
+                        "match_date": m.get("date", ""),
+                        "home_team_id": home_team_id,
+                        "away_team_id": away_team_id,
+                        "home_team_name": home_team,
+                        "away_team_name": away_team,
+                        "home_score": fthg,
+                        "away_score": ftag,
+                        "home_ht_score": hthg,
+                        "away_ht_score": htag,
+                        "status": "finished",
+                        "round_name": "",
+                    })
+
+                    # 统计
+                    self.db.upsert_match_stats({
+                        "match_id": match_id,
+                        "home_xg": None,
+                        "away_xg": None,
+                        "home_possession": None,
+                        "away_possession": None,
+                        "home_shots": m.get("homeShots"),
+                        "away_shots": m.get("awayShots"),
+                        "home_shots_on_target": m.get("homeShotsOnTarget"),
+                        "away_shots_on_target": m.get("awayShotsOnTarget"),
+                        "home_passes": None,
+                        "away_passes": None,
+                        "home_pass_accuracy": None,
+                        "away_pass_accuracy": None,
+                        "home_corners": m.get("homeCorners"),
+                        "away_corners": m.get("awayCorners"),
+                        "home_yellow_cards": m.get("homeYellow"),
+                        "away_yellow_cards": m.get("awayYellow"),
+                        "home_red_cards": m.get("homeRed"),
+                        "away_red_cards": m.get("awayRed"),
+                    })
+
+                    # 赔率
+                    self.db.upsert_odds({
+                        "match_id": match_id,
+                        "home_odds": m.get("avgHomeOdds"),
+                        "draw_odds": m.get("avgDrawOdds"),
+                        "away_odds": m.get("avgAwayOdds"),
+                        "over_25_odds": m.get("avgOver25"),
+                        "under_25_odds": m.get("avgUnder25"),
+                        "source": "football-data.co.uk",
+                    })
+
+                    count += 1
+                except Exception as e:
+                    logger.debug(f"  入库失败: {e}")
+
+        return count
 
     def _map_league(self, jc_league_name: str) -> Optional[str]:
         """竞彩联赛名映射到内部 league_id"""
@@ -223,7 +343,7 @@ class DataPipeline:
     def run(self, sources: Optional[List[str]] = None, db_only: bool = False):
         """执行完整采集管道"""
         if sources is None:
-            sources = ["sporttery", "flashscore", "fbref", "soccerway"]
+            sources = ["sporttery", "flashscore", "soccerway", "football_data"]
 
         logger.info("=" * 60)
         logger.info(f"数据采集管道启动 - {datetime.now().isoformat()}")
@@ -282,6 +402,22 @@ class DataPipeline:
                 logger.error(f"  Soccerway 失败: {e}")
                 results["soccerway"] = {"error": str(e)}
 
+        # 5. football-data.co.uk 历史数据
+        if "football_data" in sources:
+            try:
+                logger.info("\n[5] 采集 football-data.co.uk 历史数据...")
+                fd_data = self.collect_football_data()
+                matches_by_league = fd_data.get("matches", {})
+                results["football_data"] = {
+                    "matches": fd_data.get("totalMatches", 0),
+                    "leagues": fd_data.get("totalLeagues", 0),
+                }
+                ingest_count = self.ingest_football_data(matches_by_league)
+                logger.info(f"  ✓ {fd_data.get('totalMatches', 0)} 场历史比赛，入库 {ingest_count} 场")
+            except Exception as e:
+                logger.error(f"  football-data 失败: {e}")
+                results["football_data"] = {"error": str(e)}
+
         # 汇总
         logger.info("\n" + "=" * 60)
         logger.info("采集完成!")
@@ -305,13 +441,13 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="足球数据采集管道")
     parser.add_argument("--source", choices=["sporttery", "flashscore", "fbref",
-                                              "soccerway", "500", "all"],
+                                              "soccerway", "500", "football_data", "all"],
                         default="all", help="数据源")
     parser.add_argument("--db-only", action="store_true", help="仅执行数据库入库")
     args = parser.parse_args()
 
     if args.source == "all":
-        sources = ["sporttery", "flashscore", "fbref", "soccerway"]
+        sources = ["sporttery", "flashscore", "soccerway", "football_data"]
     else:
         sources = [args.source]
 

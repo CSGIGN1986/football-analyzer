@@ -15,6 +15,7 @@ from .five_hundred import FiveHundredCollector
 from .flashscore import FlashScoreCollector
 from .fbref import FBrefCollector
 from .soccerway import SoccerwayCollector
+from .football_data import FootballDataCollector
 from .browser import BrowserScraper, get_browser
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     "FlashScoreCollector",
     "FBrefCollector",
     "SoccerwayCollector",
+    "FootballDataCollector",
     "BrowserScraper",
     "get_browser",
 ]
