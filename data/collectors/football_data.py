@@ -43,21 +43,9 @@ LEAGUES = {
     "tur_super_lig": ("T1", "土超", "turkey"),
     "gre_super_league": ("G1", "希腊超", "greece"),
     "sco_premiership": ("SC0", "苏超", "scotland"),
-    # 北欧
-    "swe_allsvenskan": ("SWE", "瑞超", "sweden"),
-    "nor_eliteserien": ("NOR", "挪超", "norway"),
-    "den_superliga": ("DEN", "丹超", "denmark"),
-    "fin_veikkausliiga": ("FIN", "芬超", "finland"),
-    # 其他
     "pol_ekstraklasa": ("POL", "波甲", "poland"),
-    "cze_first_league": ("CZE", "捷甲", "czech"),
-    "aut_bundesliga": ("AUT", "奥甲", "austria"),
-    "sui_super_league": ("SUI", "瑞士超", "switzerland"),
-    "rus_premier": ("RUS", "俄超", "russia"),
     "usa_mls": ("USA", "美职联", "usa"),
-    "mex_liga_mx": ("MEX", "墨超", "mexico"),
     "arg_primera": ("ARG", "阿甲", "argentina"),
-    "bra_serie_a": ("BRA", "巴甲", "brazil"),
     "chn_super": ("CHN", "中超", "china"),
     "jpn_j1": ("JPN", "日职", "japan"),
 }
@@ -201,8 +189,8 @@ class FootballDataCollector:
             league_keys = [
                 "eng_premier", "ger_bundesliga", "ita_serie_a",
                 "esp_la_liga", "fra_ligue_1", "ned_eredivisie",
-                "por_primeira", "swe_allsvenskan", "nor_eliteserien",
-                "fin_veikkausliiga", "bra_serie_a",
+                "por_primeira", "bel_pro_league", "tur_super_lig",
+                "sco_premiership",
             ]
         if seasons is None:
             # 默认采集最近 3 个赛季

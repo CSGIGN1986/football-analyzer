@@ -118,6 +118,70 @@ class FlashScoreCollector:
         finally:
             page.close()
 
+    def get_results(self, league_key: str) -> List[Dict]:
+        """获取联赛近期赛果（含比分）"""
+        info = self.LEAGUES.get(league_key)
+        if not info:
+            return []
+
+        url_path, cn_name = info
+        url = f"{self.BASE_URL}{url_path}results/"
+
+        browser, _ = self._get_browser()
+        page = browser.new_page()
+
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(4000)
+
+            events = page.query_selector_all(".event__match")
+            results = []
+
+            for event in events:
+                try:
+                    text = event.inner_text()
+                    if not text.strip():
+                        continue
+                    parts = [p for p in text.strip().split("\n") if p.strip()]
+                    # 格式: 日期时间 / 主队 / 客队 / 主比分 / 客比分
+                    if len(parts) >= 5:
+                        results.append({
+                            "time": parts[0],
+                            "homeTeam": parts[1],
+                            "awayTeam": parts[2],
+                            "homeScore": self._safe_int(parts[3]),
+                            "awayScore": self._safe_int(parts[4]),
+                            "league": league_key,
+                            "source": "flashscore",
+                        })
+                except Exception as e:
+                    logger.debug(f"  赛果解析失败: {e}")
+
+            return results
+        finally:
+            page.close()
+
+    def collect_results(self, league_keys: Optional[List[str]] = None) -> Dict[str, List[Dict]]:
+        """采集赛果"""
+        if league_keys is None:
+            league_keys = list(self.LEAGUES.keys())
+
+        logger.info(f"采集 FlashScore 赛果 ({len(league_keys)} 个联赛)...")
+        all_results = {}
+
+        for key in league_keys:
+            try:
+                cn = self.LEAGUES.get(key, ("", key))[1]
+                results = self.get_results(key)
+                if results:
+                    all_results[key] = results
+                    logger.info(f"  {cn}: {len(results)} 场赛果")
+                time.sleep(2)
+            except Exception as e:
+                logger.error(f"  {cn} 赛果失败: {e}")
+
+        return all_results
+
     def collect_standings(self, league_keys: Optional[List[str]] = None) -> Dict[str, List[Dict]]:
         """采集积分榜"""
         if league_keys is None:
