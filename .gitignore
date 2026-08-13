@@ -15,3 +15,4 @@ data/five_hundred/
 data/football.db*
 data/collected_*.json
 data/*.json
+data/football_data/
